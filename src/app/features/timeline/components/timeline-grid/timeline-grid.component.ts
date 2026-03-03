@@ -69,6 +69,7 @@ import { CurrentDayIndicatorComponent } from '../current-day-indicator/current-d
                     [dateRange]="dateRange()"
                     [zoom]="zoom()"
                     [totalWidth]="totalWidth()"
+                    [isFirstRow]="i === 0"
                   />
                 </div>
               }

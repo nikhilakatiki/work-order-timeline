@@ -30,15 +30,15 @@ import { dateToIso, addDays, isoToDate } from '../../../../shared/utils/date-hel
       @if (showSlot()) {
         <div
           class="slot"
-          [class.slot--colliding]="slotColliding()"
           [style.left.px]="slotLeft()"
+          [style.width.px]="slotWidth()"
         ></div>
         <div
           class="slot-tooltip"
-          [class.slot-tooltip--colliding]="slotColliding()"
+          [class.slot-tooltip--below]="isFirstRow()"
           [style.left.px]="tooltipLeft()"
         >
-          {{ slotColliding() ? 'Dates overlap' : 'Click to add dates' }}
+          Click to add dates
         </div>
       }
     </div>
@@ -59,7 +59,6 @@ import { dateToIso, addDays, isoToDate } from '../../../../shared/utils/date-hel
       position: absolute;
       top: 50%;
       transform: translateY(-50%);
-      width: clamp(80px, 15vw, 113px);
       height: clamp(32px, 5vh, 38px);
       border-radius: 8px;
       background-color: rgba(101, 112, 255, 0.1);
@@ -68,22 +67,10 @@ import { dateToIso, addDays, isoToDate } from '../../../../shared/utils/date-hel
       z-index: 35;
       transition: background-color 150ms ease, border-color 150ms ease;
     }
-    .slot--colliding {
-      background-color: rgba(239, 68, 68, 0.1);
-      border-color: rgba(239, 68, 68, 0.5);
-      animation: slot-shake 0.4s ease;
-    }
-    @keyframes slot-shake {
-      0%, 100% { transform: translateY(-50%) translateX(0); }
-      20% { transform: translateY(-50%) translateX(-3px); }
-      40% { transform: translateY(-50%) translateX(3px); }
-      60% { transform: translateY(-50%) translateX(-2px); }
-      80% { transform: translateY(-50%) translateX(2px); }
-    }
     .slot-tooltip {
       position: absolute;
-      bottom: -30px;
-      transform: translateX(-40px);
+      top: 50%;
+      transform: translate(-50%, calc(-50% - 36px));
       width: 130px;
       height: 26px;
       display: flex;
@@ -103,8 +90,9 @@ import { dateToIso, addDays, isoToDate } from '../../../../shared/utils/date-hel
       pointer-events: none;
       z-index: 36;
     }
-    .slot-tooltip--colliding {
-      background-color: rgba(239, 68, 68, 0.85);
+    .slot-tooltip--below {
+      top: 50%;
+      transform: translate(-50%, calc(-50% + 36px));
     }
 
     // Touch device adjustments
@@ -120,7 +108,6 @@ import { dateToIso, addDays, isoToDate } from '../../../../shared/utils/date-hel
     // Mobile adjustments
     @media (max-width: 480px) {
       .slot {
-        width: 60px;
         height: 28px;
         border-radius: 6px;
       }
@@ -128,8 +115,11 @@ import { dateToIso, addDays, isoToDate } from '../../../../shared/utils/date-hel
         font-size: 11px;
         width: 110px;
         height: 24px;
-        bottom: -28px;
-        transform: translateX(-30px);
+        top: 50%;
+        transform: translate(-50%, calc(-50% - 30px));
+      }
+      .slot-tooltip--below {
+        transform: translate(-50%, calc(-50% + 30px));
       }
     }
   `],
@@ -140,16 +130,15 @@ export class TimelineRowComponent {
   readonly dateRange = input.required<DateRange>();
   readonly zoom = input.required<ZoomLevel>();
   readonly totalWidth = input.required<number>();
+  readonly isFirstRow = input(false);
 
   private readonly calcService = inject(TimelineCalculationService);
   private readonly panelState = inject(PanelStateService);
 
   readonly showSlot = signal(false);
   readonly slotLeft = signal(0);
+  readonly slotWidth = signal(0);
   readonly tooltipLeft = signal(0);
-  readonly slotColliding = signal(false);
-  /** Show overlap warning only when hovering close to a bar boundary. */
-  private readonly overlapEdgeThresholdPx = 10;
 
   onMouseMove(event: MouseEvent): void {
     const target = event.target as HTMLElement;
@@ -157,38 +146,46 @@ export class TimelineRowComponent {
       this.showSlot.set(false);
       return;
     }
+
     const x = event.offsetX;
-    const slotL = x - 56;
-    const slotR = slotL + 113;
-
-    // Check if slot overlaps any bar and whether cursor is near a start/end edge.
     const orders = this.workOrders();
-    let colliding = false;
-    let nearBoundary = false;
-    for (const o of orders) {
-      const bar = this.calcService.getBarPosition(o.data.startDate, o.data.endDate, this.dateRange(), this.zoom());
-      const barL = bar.left;
-      const barR = bar.left + bar.width;
-      if (slotL < barR && slotR > barL) {
-        colliding = true;
-        const distanceToNearestEdge = Math.min(Math.abs(x - barL), Math.abs(x - barR));
-        if (distanceToNearestEdge <= this.overlapEdgeThresholdPx) {
-          nearBoundary = true;
-          break;
-        }
-      }
-    }
-
-    // Hide overlap warning when hovering through the middle of occupied blocks.
-    if (colliding && !nearBoundary) {
+    const freeSegment = this.getFreeSegmentAtCursor(x, orders);
+    if (!freeSegment) {
       this.showSlot.set(false);
       return;
     }
 
+    const defaultSlotWidth = this.getSlotWidth();
+    const freeWidth = Math.max(0, freeSegment.right - freeSegment.left);
+    if (freeWidth < 8) {
+      this.showSlot.set(false);
+      return;
+    }
+    const effectiveSlotWidth = Math.min(defaultSlotWidth, freeWidth);
+
+    let slotL: number;
+    if (freeWidth <= defaultSlotWidth) {
+      // In tight spaces, shrink to exactly fill the available open segment.
+      slotL = freeSegment.left;
+    } else {
+      slotL = Math.max(
+        freeSegment.left,
+        Math.min(freeSegment.right - effectiveSlotWidth, x - effectiveSlotWidth / 2),
+      );
+    }
+
+    const tooltipWidth = this.getTooltipWidth();
+    const tooltipHalf = tooltipWidth / 2;
+    const slotCenter = slotL + effectiveSlotWidth / 2;
+    const clampedTooltipCenter = Math.max(
+      tooltipHalf,
+      Math.min(this.totalWidth() - tooltipHalf, slotCenter),
+    );
+
     this.slotLeft.set(slotL);
-    this.tooltipLeft.set(slotL);
+    this.slotWidth.set(effectiveSlotWidth);
+    this.tooltipLeft.set(clampedTooltipCenter);
     this.showSlot.set(true);
-    this.slotColliding.set(colliding);
   }
 
   onMouseLeave(): void {
@@ -254,5 +251,67 @@ export class TimelineRowComponent {
     const endDate = dateToIso(end);
 
     this.panelState.openCreate(this.workCenter().docId, startDate, endDate);
+  }
+
+  private getFreeSegmentAtCursor(
+    cursorX: number,
+    orders: WorkOrderDocument[],
+  ): { left: number; right: number } | null {
+    const total = this.totalWidth();
+    const bars = orders
+      .map(o => this.calcService.getBarPosition(o.data.startDate, o.data.endDate, this.dateRange(), this.zoom()))
+      .map(pos => ({ left: pos.left, right: pos.left + pos.width }))
+      .sort((a, b) => a.left - b.left);
+
+    let segmentStart = 0;
+    let i = 0;
+    while (i < bars.length) {
+      const bar = bars[i];
+
+      if (bar.right <= segmentStart) {
+        i++;
+        continue;
+      }
+
+      if (cursorX < bar.left) {
+        return { left: segmentStart, right: bar.left };
+      }
+
+      if (cursorX > bar.left && cursorX < bar.right) {
+        return null;
+      }
+
+      segmentStart = Math.max(segmentStart, bar.right);
+      i++;
+
+      // Merge contiguous/overlapping bars so gap detection is stable.
+      while (i < bars.length && bars[i].left <= segmentStart) {
+        if (cursorX > bars[i].left && cursorX < bars[i].right) {
+          return null;
+        }
+        segmentStart = Math.max(segmentStart, bars[i].right);
+        i++;
+      }
+    }
+
+    if (cursorX >= segmentStart && cursorX <= total) {
+      return { left: segmentStart, right: total };
+    }
+
+    return null;
+  }
+
+  private getTooltipWidth(): number {
+    if (typeof window !== 'undefined' && window.innerWidth <= 480) {
+      return 110;
+    }
+    return 130;
+  }
+
+  private getSlotWidth(): number {
+    if (typeof window !== 'undefined' && window.innerWidth <= 480) {
+      return 60;
+    }
+    return 113;
   }
 }
