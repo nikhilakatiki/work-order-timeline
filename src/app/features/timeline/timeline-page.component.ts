@@ -140,7 +140,7 @@ export class TimelinePageComponent implements OnInit, OnDestroy {
   private readonly gridRef = viewChild<TimelineGridComponent>('grid');
   private clockTimer: ReturnType<typeof setInterval> | null = null;
 
-  readonly zoom = signal<ZoomLevel>('day');
+  readonly zoom = signal<ZoomLevel>('month');
   /** Ticks every 60s so todayOffset recomputes with the real current time */
   readonly now = signal(new Date());
 

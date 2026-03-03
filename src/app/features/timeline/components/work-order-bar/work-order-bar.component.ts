@@ -22,7 +22,6 @@ type BarContentMode = 'full' | 'name-only' | 'short-id' | 'tiny';
       [class.bar--tiny]="contentMode() === 'tiny'"
       [style.left.px]="position().left"
       [style.width.px]="position().width"
-      [attr.title]="tooltipText()"
       (click)="$event.stopPropagation()"
     >
       <span class="bar__label">{{ labelText() }}</span>
@@ -222,12 +221,6 @@ export class WorkOrderBarComponent {
     if (mode === 'full' || mode === 'name-only') return name;
     if (mode === 'tiny') return this.tinyLabel(name);
     return this.shortId(name);
-  });
-
-  readonly tooltipText = computed(() => {
-    const name = this.workOrder().data.name;
-    const status = this.workOrder().data.status.replace('-', ' ');
-    return `${name} · ${status}`;
   });
 
   private shortId(name: string): string {

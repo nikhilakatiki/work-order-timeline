@@ -1,5 +1,5 @@
 import {
-  Component, ChangeDetectionStrategy, inject, OnInit, signal,
+  Component, ChangeDetectionStrategy, inject, OnInit, signal, computed,
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { ReactiveFormsModule, FormBuilder, FormGroup, Validators, AbstractControl, ValidationErrors } from '@angular/forms';
@@ -9,7 +9,7 @@ import { trigger, transition, style, animate } from '@angular/animations';
 import { CustomDateFormatter } from '../../../../shared/utils/custom-date-formatter';
 import { PanelStateService } from '../../../../core/services/panel-state.service';
 import { WorkOrderDataService } from '../../../../core/services/work-order-data.service';
-import { OverlapDetectionService } from '../../../../core/services/overlap-detection.service';
+import { OverlapDetectionService, OverlapResult } from '../../../../core/services/overlap-detection.service';
 import { WorkOrderStatus } from '../../../../core/models/work-order.model';
 
 @Component({
@@ -107,14 +107,6 @@ import { WorkOrderStatus } from '../../../../core/models/work-order.model';
               [readonly]="true"
               (click)="endDp.toggle()"
             >
-            <button type="button" class="field__calendar-btn" (click)="endDp.toggle()">
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                <rect x="1.5" y="2.5" width="13" height="12" rx="1.5" stroke="rgba(104,113,150,1)" stroke-width="1.2"/>
-                <line x1="1.5" y1="6" x2="14.5" y2="6" stroke="rgba(104,113,150,1)" stroke-width="1.2"/>
-                <line x1="5" y1="1" x2="5" y2="4" stroke="rgba(104,113,150,1)" stroke-width="1.2" stroke-linecap="round"/>
-                <line x1="11" y1="1" x2="11" y2="4" stroke="rgba(104,113,150,1)" stroke-width="1.2" stroke-linecap="round"/>
-              </svg>
-            </button>
           </div>
           @if (form.get('endDate')?.touched && form.get('endDate')?.hasError('required')) {
             <span class="field__error">End date is required</span>
@@ -135,14 +127,6 @@ import { WorkOrderStatus } from '../../../../core/models/work-order.model';
               [readonly]="true"
               (click)="startDp.toggle()"
             >
-            <button type="button" class="field__calendar-btn" (click)="startDp.toggle()">
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                <rect x="1.5" y="2.5" width="13" height="12" rx="1.5" stroke="rgba(104,113,150,1)" stroke-width="1.2"/>
-                <line x1="1.5" y1="6" x2="14.5" y2="6" stroke="rgba(104,113,150,1)" stroke-width="1.2"/>
-                <line x1="5" y1="1" x2="5" y2="4" stroke="rgba(104,113,150,1)" stroke-width="1.2" stroke-linecap="round"/>
-                <line x1="11" y1="1" x2="11" y2="4" stroke="rgba(104,113,150,1)" stroke-width="1.2" stroke-linecap="round"/>
-              </svg>
-            </button>
           </div>
           @if (form.get('startDate')?.touched && form.get('startDate')?.hasError('required')) {
             <span class="field__error">Start date is required</span>
@@ -154,7 +138,7 @@ import { WorkOrderStatus } from '../../../../core/models/work-order.model';
           <div class="panel__error">End date must be after start date</div>
         }
         @if (overlapError()) {
-          <div class="panel__error">This work order overlaps with an existing order on the same work center</div>
+          <div class="panel__error">{{ overlapErrorMessage() }}</div>
         }
       </form>
     </div>
@@ -314,21 +298,6 @@ import { WorkOrderStatus } from '../../../../core/models/work-order.model';
       width: 100%;
       cursor: pointer;
     }
-    .field__calendar-btn {
-      position: absolute;
-      right: 12px;
-      top: 50%;
-      transform: translateY(-50%);
-      background: none;
-      border: none;
-      cursor: pointer;
-      padding: 2px;
-      opacity: 0.6;
-      transition: opacity 150ms ease;
-    }
-    .field__calendar-btn:hover {
-      opacity: 1;
-    }
     .field__error {
       font-size: 12px;
       color: var(--color-danger);
@@ -401,9 +370,6 @@ import { WorkOrderStatus } from '../../../../core/models/work-order.model';
         height: 44px;
         font-size: 16px;
       }
-      .field__calendar-btn {
-        right: 16px;
-      }
     }
   `],
 })
@@ -413,7 +379,15 @@ export class WorkOrderPanelComponent implements OnInit {
   private readonly overlapService = inject(OverlapDetectionService);
   private readonly fb = inject(FormBuilder);
 
-  readonly overlapError = signal(false);
+  readonly overlapError = signal<OverlapResult>(null);
+  readonly overlapErrorMessage = computed(() => {
+    switch (this.overlapError()) {
+      case 'start': return 'Please choose a different start date, it overlaps with an existing work order';
+      case 'end': return 'Please choose a different end date, it overlaps with an existing work order';
+      case 'both': return 'Please choose different start and end dates, they overlap with an existing work order';
+      default: return '';
+    }
+  });
   private initialFormSnapshot = '';
 
   readonly statusOptions: { label: string; value: WorkOrderStatus }[] = [
@@ -495,16 +469,16 @@ export class WorkOrderPanelComponent implements OnInit {
   private checkOverlap(): void {
     const val = this.form.value;
     if (!val.workCenterId || !val.startDate || !val.endDate) {
-      this.overlapError.set(false);
+      this.overlapError.set(null);
       return;
     }
     try {
       const startIso = this.ngbToIso(val.startDate);
       const endIso = this.ngbToIso(val.endDate);
       const excludeId = this.panelState.isEditMode() ? this.panelState.editingWorkOrderId() ?? undefined : undefined;
-      this.overlapError.set(this.overlapService.hasOverlap(val.workCenterId, startIso, endIso, excludeId));
+      this.overlapError.set(this.overlapService.getOverlapType(val.workCenterId, startIso, endIso, excludeId));
     } catch {
-      this.overlapError.set(false);
+      this.overlapError.set(null);
     }
   }
 
@@ -525,11 +499,12 @@ export class WorkOrderPanelComponent implements OnInit {
     const endIso = this.ngbToIso(val.endDate);
 
     const excludeId = this.panelState.isEditMode() ? this.panelState.editingWorkOrderId() ?? undefined : undefined;
-    if (this.overlapService.hasOverlap(val.workCenterId, startIso, endIso, excludeId)) {
-      this.overlapError.set(true);
+    const overlap = this.overlapService.getOverlapType(val.workCenterId, startIso, endIso, excludeId);
+    if (overlap) {
+      this.overlapError.set(overlap);
       return;
     }
-    this.overlapError.set(false);
+    this.overlapError.set(null);
 
     if (this.panelState.isEditMode()) {
       const orderId = this.panelState.editingWorkOrderId();
